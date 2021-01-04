@@ -1,0 +1,6 @@
+framework module Pods_FMAVCam {
+  umbrella header "Pods-FMAVCam-umbrella.h"
+
+  export *
+  module * { export * }
+}

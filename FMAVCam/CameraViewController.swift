@@ -63,13 +63,14 @@ class CameraViewController: UIViewController {
     private let sessionQueue = DispatchQueue(label: "session queue")
     private let session = AVCaptureSession()
     private var isSessionRunning = false
-    var videoDeviceInput: AVCaptureDeviceInput!
+    @objc dynamic var videoDeviceInput: AVCaptureDeviceInput!
     private let photoOutput = AVCapturePhotoOutput()
     private var movieFileOutput: AVCaptureMovieFileOutput?
     private var setupResult: SessionSetupResult = .success
     private let videoDeviceDiscoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .builtInDualCamera, .builtInTrueDepthCamera], mediaType: .video, position: .unspecified)
     private var inProgressPhotoCaptureDelegates = [Int64: PhotoCaptureProcessor]()
     private var keyValueObservations = [NSKeyValueObservation]()
+    private var backgroundRecordingID: UIBackgroundTaskIdentifier?
     
     // MARK: life cycle
     override func viewDidLoad() {
@@ -159,6 +160,7 @@ class CameraViewController: UIViewController {
             if self.setupResult == .success {
                 self.session.stopRunning()
                 self.isSessionRunning = self.session.isRunning
+                self.removeObservers()
             }
         }
         super.viewWillDisappear(animated)
@@ -397,15 +399,15 @@ class CameraViewController: UIViewController {
                 photoSettings.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: photoSettings.__availablePreviewPhotoPixelFormatTypes.first!]
             }
             
-            let photoCaptureProcessor = PhotoCaptureProcessor(with: photoSettings) {
+            let photoCaptureProcessor = PhotoCaptureProcessor(with: photoSettings, willCapturePhotoAnimation: {
                 
-            } livePhotoCaptureHandler: { finish in
+            }, livePhotoCaptureHandler: { (finish) in
                 
-            } completionHandler: { processor in
+            }, completionHandler: { (processor) in
                 
-            } photoProcessingHandler: { finish in
+            }, photoProcessingHandler: { (finish) in
                 
-            }
+            })
             
             self.inProgressPhotoCaptureDelegates[photoCaptureProcessor.requestedPhotoSettings.uniqueID] = photoCaptureProcessor
             self.photoOutput.capturePhoto(with: photoSettings, delegate: photoCaptureProcessor)
@@ -425,7 +427,7 @@ class CameraViewController: UIViewController {
         sessionQueue.async {
             if !movieFileOutput.isRecording {
                 if UIDevice.current.isMultitaskingSupported {
-                    
+                    self.backgroundRecordingID = UIApplication.shared.beginBackgroundTask(expirationHandler: nil)
                 }
                 
                 let movieFileOutputConnection = movieFileOutput.connection(with: .video)
@@ -449,7 +451,7 @@ class CameraViewController: UIViewController {
     }
 }
 
-// kvo
+// MARK: KVO and Notification
 extension CameraViewController {
     private func addObservers() {
         let keyValueObservation = session.observe(\.isRunning, options: .new) { _, change in
@@ -464,10 +466,75 @@ extension CameraViewController {
         }
         keyValueObservations.append(keyValueObservation)
         
+        let systemPressureStateObservation = observe(\.videoDeviceInput.device.systemPressureState, options: .new) { (_, change) in
+            guard let systemPressureState = change.newValue else { return }
+            self.setRecommendedFrameRateRangeForPressureState(systemPressureState: systemPressureState)
+        }
+        keyValueObservations.append(systemPressureStateObservation)
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(sessionRuntimeError(notification:)), name: .AVCaptureSessionRuntimeError, object: session)
         NotificationCenter.default.addObserver(self, selector: #selector(sessionWasInterrupted(notification:)), name: .AVCaptureSessionWasInterrupted, object: session)
         NotificationCenter.default.addObserver(self, selector: #selector(sessionInterruptionEnded(notification:)), name: .AVCaptureSessionInterruptionEnded, object: session)
     }
     
+    private func removeObservers() {
+        NotificationCenter.default.removeObserver(self)
+        
+        for keyValueObservation in keyValueObservations {
+            keyValueObservation.invalidate()
+        }
+        keyValueObservations.removeAll()
+    }
+    
+    /**
+     如果设备承受系统压力，比如过热，捕获会话也可能停止。相机本身不会降低拍摄质量或减少帧数;为了避免让你的用户感到惊讶，你可以让你的应用手动降低帧速率，关闭深度，或者根据AVCaptureDevice.SystemPressureState:的反馈来调整性能。
+     */
+    private func setRecommendedFrameRateRangeForPressureState(systemPressureState: AVCaptureDevice.SystemPressureState) {
+        let pressureLevel = systemPressureState.level
+        if pressureLevel == .serious || pressureLevel == .critical {
+            /*
+             serious: 系统压力升高。捕获性能可能会受到影响。建议帧速率限制。
+             critical: 系统压力严重升高。捕获质量和性能受到显著影响。强烈建议进行帧速率限制。
+             */
+            do {
+                try self.videoDeviceInput.device.lockForConfiguration()
+                // 设置帧速率，速度为1/20表示0.05s来一帧，每s就是20帧
+                self.videoDeviceInput.device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 20)
+                self.videoDeviceInput.device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 15)
+                self.videoDeviceInput.device.unlockForConfiguration()
+            } catch {
+                print("Could not lock device for configuration: \(error)")
+            }
+        } else {
+            print("Session stopped running due to shutdown system pressure level.")
+        }
+    }
+    
+    // session运行时错误
+    @objc private func sessionRuntimeError(notification: NSNotification) {
+        guard let error = notification.userInfo?[AVCaptureSessionErrorKey] as? AVError else {
+            return
+        }
+        
+        print("Capture session runtime error: \(error)")
+        
+        if error.code == .mediaServicesWereReset {
+            sessionQueue.async {
+                if self.isSessionRunning {
+                    self.session.startRunning()
+                    self.isSessionRunning = self.session.isRunning
+                } else {
+                    DispatchQueue.main.async {
+                        
+                    }
+                }
+            }
+        } else {
+            
+        }
+    }
+    
+    // 中断处理
     @objc private func sessionWasInterrupted(notification: NSNotification) {
         if let userInfoValue = notification.userInfo?[AVCaptureSessionInterruptionReasonKey] as AnyObject?,
            let reasonInterValue = userInfoValue.integerValue,
@@ -475,16 +542,34 @@ extension CameraViewController {
             print("Capture session was interrupted with reason \(reason)")
             
             var showResumeButton = false
+            if reason == .audioDeviceInUseByAnotherClient || reason == .videoDeviceInUseByAnotherClient {
+                /*
+                 被其他应用占用了音配输入设备，比如来电话了，或者系统闹铃响了
+                 或者
+                 被其他captureSession占用了输入设备
+                 */
+                showResumeButton = true
+            } else if reason == .videoDeviceNotAvailableWithMultipleForegroundApps {
+                // "MultipleForegroundApps"一般指的是iPad或者macOS上的分屏功能
+            } else if reason == .videoDeviceNotAvailableDueToSystemPressure {
+                // 被系统强制关闭
+                print("Session stopped running due to shutdown system pressure level.")
+            }
+            if showResumeButton {
+                
+            }
         }
         
     }
     
+    // 中断结束了, 从中断恢复
     @objc private func sessionInterruptionEnded(notification: NSNotification) {
-        
+        print("Capture session interruption ended")
     }
 }
 
 extension CameraViewController: AVCaptureFileOutputRecordingDelegate {
+    // 开始录像
     func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
         DispatchQueue.main.async {
             self.recordButton.isEnabled = true
@@ -492,6 +577,7 @@ extension CameraViewController: AVCaptureFileOutputRecordingDelegate {
         }
     }
     
+    // 录像结束
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         func cleanup() {
             let path = outputFileURL.path
@@ -500,6 +586,15 @@ extension CameraViewController: AVCaptureFileOutputRecordingDelegate {
                     try FileManager.default.removeItem(atPath: path)
                 } catch {
                     print("Could not remove file at url: \(outputFileURL)")
+                }
+            }
+            
+            // 结束后台任务
+            if let currentBackgroundRecordingId = backgroundRecordingID {
+                backgroundRecordingID = UIBackgroundTaskIdentifier.invalid
+                
+                if currentBackgroundRecordingId != UIBackgroundTaskIdentifier.invalid {
+                    UIApplication.shared.endBackgroundTask(currentBackgroundRecordingId)
                 }
             }
         }
@@ -514,17 +609,17 @@ extension CameraViewController: AVCaptureFileOutputRecordingDelegate {
         if success {
             PHPhotoLibrary.requestAuthorization { status in
                 if status == .authorized {
-                    PHPhotoLibrary.shared().performChanges {
+                    PHPhotoLibrary.shared().performChanges({
                         let options = PHAssetResourceCreationOptions()
                         options.shouldMoveFile = true
                         let creationRequest = PHAssetCreationRequest.forAsset()
                         creationRequest.addResource(with: .video, fileURL: outputFileURL, options: options)
-                    } completionHandler: { success, error in
+                    }, completionHandler: { (success, error) in
                         if !success {
                             print("AVCam couldn't save the movie to your photo library: \(String(describing: error))")
                         }
                         cleanup()
-                    }
+                    })
                 } else {
                     cleanup()
                 }

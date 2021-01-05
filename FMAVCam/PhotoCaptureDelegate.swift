@@ -92,18 +92,18 @@ extension PhotoCaptureProcessor: AVCapturePhotoCaptureDelegate {
         
         PHPhotoLibrary.requestAuthorization { status in
             if status == .authorized {
-                PHPhotoLibrary.shared().performChanges {
+                PHPhotoLibrary.shared().performChanges({
                     let options = PHAssetResourceCreationOptions()
                     let creationRequest = PHAssetCreationRequest.forAsset()
                     options.uniformTypeIdentifier = self.requestedPhotoSettings.processedFileType.map { $0.rawValue }
                     creationRequest.addResource(with: .photo, data: photodata, options: options)
                     
-                } completionHandler: { _, error in
+                }, completionHandler: { (_, error) in
                     if let error = error {
                         print("Error occurred while saving photo to photo library: \(error)")
                     }
                     self.didFinish()
-                }
+                })
             } else {
                 self.didFinish()
             }

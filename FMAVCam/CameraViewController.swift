@@ -13,15 +13,30 @@ import Photos
 
 class CameraViewController: UIViewController {
     
+    private enum SessionSetupResult {
+        case success
+        case notAuthorized
+        case configurationFailed
+    }
+    
     private enum CaptureMode: Int {
          case photo = 0
          case movie = 1
     }
     
-    private enum SessionSetupResult {
-        case success
-        case notAuthorized
-        case configurationFailed
+    private enum LivePhotoMode {
+        case on
+        case off
+    }
+    
+    private enum DepthDataDeliveryMode {
+        case on
+        case off
+    }
+    
+    private enum PortraitEffectsMatteDeliveryMode {
+        case on
+        case off
     }
     
     // UI
@@ -59,7 +74,37 @@ class CameraViewController: UIViewController {
         return btn
     }()
     
-    //
+    lazy var livePhotoModeButton: UIButton = {
+        let btn = UIButton()
+        btn.tintColor = .yellow
+        btn.setImage(#imageLiteral(resourceName: "LivePhotoON"), for: .normal)
+        btn.addTarget(self, action: #selector(toggleLivePhotoMode), for: .touchUpInside)
+        return btn
+    }()
+    
+    lazy var depthDataDeliveryButton: UIButton = {
+        let btn = UIButton()
+        btn.tintColor = .yellow
+        btn.setImage(#imageLiteral(resourceName: "DepthON"), for: .normal)
+        btn.addTarget(self, action: #selector(toggleDepthDataDeliveryMode), for: .touchUpInside)
+        return btn
+    }()
+    
+    lazy var portraitEffectsMatteDeliveryButton: UIButton = {
+        let btn = UIButton()
+        btn.tintColor = .yellow
+        btn.setImage(#imageLiteral(resourceName: "PortraitMatteOFF"), for: .normal)
+        btn.addTarget(self, action: #selector(togglePortraitEffectsMatteDeliveryMode), for: .touchUpInside)
+        return btn
+    }()
+    
+    lazy var focusGes: UITapGestureRecognizer = {
+        let ges = UITapGestureRecognizer(target: self, action: #selector(focusAndExposeTap(_:)))
+        return ges
+    }()
+    
+    /* 存储型类型属性是延迟初始化的，它们只有在第一次被访问的时候才会被初始化。即使它们被多个线程同时访问，系统也保证只会对其进行一次初始化，并且不需要对其使用 lazy 修饰符。
+     */
     private let sessionQueue = DispatchQueue(label: "session queue")
     private let session = AVCaptureSession()
     private var isSessionRunning = false
@@ -71,17 +116,24 @@ class CameraViewController: UIViewController {
     private var inProgressPhotoCaptureDelegates = [Int64: PhotoCaptureProcessor]()
     private var keyValueObservations = [NSKeyValueObservation]()
     private var backgroundRecordingID: UIBackgroundTaskIdentifier?
+    private var livePhotoMode: LivePhotoMode = .off
+    private var depthDataDeliveryMode: DepthDataDeliveryMode = .off
+    private var portraitEffectsMatteDeliveryMode: PortraitEffectsMatteDeliveryMode = .off
     
     // MARK: life cycle
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         setupUI()
+        
+        previewView.addGestureRecognizer(focusGes)
     
         cameraButton.isEnabled = false
         recordButton.isEnabled = false
         captureModeControl.isEnabled = false
         captureButton.isEnabled = false
+        livePhotoModeButton.isEnabled = false
+        depthDataDeliveryButton.isEnabled = false
         
         previewView.session = session
         
@@ -176,7 +228,7 @@ class CameraViewController: UIViewController {
         // 设置分辨率，新的设置分辨率的方法使用activeFormat
         session.sessionPreset = .photo
         
-        // 添加输入
+        // 添加摄像头输入
         do {
             var defaultVideoDevice: AVCaptureDevice?
             
@@ -238,6 +290,13 @@ class CameraViewController: UIViewController {
             session.addOutput(photoOutput)
             
             photoOutput.isHighResolutionCaptureEnabled = true
+            photoOutput.isLivePhotoCaptureEnabled = photoOutput.isLivePhotoCaptureSupported
+            photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
+            photoOutput.isPortraitEffectsMatteDeliveryEnabled = photoOutput.isPortraitEffectsMatteDeliverySupported
+            
+            livePhotoMode = photoOutput.isLivePhotoCaptureSupported ? .on : .off
+            depthDataDeliveryMode = photoOutput.isDepthDataDeliverySupported ? .on : .off
+            portraitEffectsMatteDeliveryMode = photoOutput.isPortraitEffectsMatteDeliverySupported ? .on : .off
         } else {
             print("Could not add photo output to the session")
             setupResult = .configurationFailed
@@ -272,6 +331,10 @@ class CameraViewController: UIViewController {
                 
                 if self.photoOutput.isDepthDataDeliverySupported {
                     self.photoOutput.isDepthDataDeliveryEnabled = true
+                    
+                    DispatchQueue.main.async {
+                        self.depthDataDeliveryButton.isEnabled = true
+                    }
                 }
                 
                 if self.photoOutput.isPortraitEffectsMatteDeliverySupported {
@@ -280,6 +343,12 @@ class CameraViewController: UIViewController {
                 
                 if !self.photoOutput.availableSemanticSegmentationMatteTypes.isEmpty {
                     self.photoOutput.enabledSemanticSegmentationMatteTypes = self.photoOutput.availableSemanticSegmentationMatteTypes
+                }
+                
+                DispatchQueue.main.async {
+                    self.livePhotoModeButton.isHidden = false
+                    self.depthDataDeliveryButton.isHidden = false
+                    self.portraitEffectsMatteDeliveryButton.isHidden = false
                 }
                 
                 self.session.commitConfiguration()
@@ -315,6 +384,14 @@ class CameraViewController: UIViewController {
     }
     
     @objc private func changeCamera() {
+        cameraButton.isEnabled = false
+        recordButton.isEnabled = false
+        captureButton.isEnabled = false
+        livePhotoModeButton.isEnabled = false
+        captureModeControl.isEnabled = false
+        depthDataDeliveryButton.isEnabled = false
+        portraitEffectsMatteDeliveryButton.isEnabled = false
+        
         sessionQueue.async {
             let currentVideoDevice = self.videoDeviceInput.device
             let currentPostion = currentVideoDevice.position
@@ -367,10 +444,25 @@ class CameraViewController: UIViewController {
                         }
                     }
                     
+                    // 切换相机的时候设置实时照片和深度数据支持
+                    self.photoOutput.isLivePhotoCaptureEnabled = self.photoOutput.isLivePhotoCaptureSupported
+                    self.photoOutput.isDepthDataDeliveryEnabled = self.photoOutput.isDepthDataDeliverySupported
+                    self.photoOutput.isPortraitEffectsMatteDeliveryEnabled = self.photoOutput.isPortraitEffectsMatteDeliverySupported
+                    
                     self.session.commitConfiguration()
                 } catch {
                     print("Error occurred while creating video device input: \(error)")
                 }
+            }
+            
+            DispatchQueue.main.async {
+                self.cameraButton.isEnabled = true
+                self.recordButton.isEnabled = self.movieFileOutput != nil
+                self.captureButton.isEnabled = true
+                self.livePhotoModeButton.isEnabled = true
+                self.captureModeControl.isEnabled = true
+                self.depthDataDeliveryButton.isEnabled = self.photoOutput.isDepthDataDeliveryEnabled
+                self.portraitEffectsMatteDeliveryButton.isEnabled = self.photoOutput.isPortraitEffectsMatteDeliveryEnabled
             }
         }
     }
@@ -398,6 +490,16 @@ class CameraViewController: UIViewController {
             if !photoSettings.__availablePreviewPhotoPixelFormatTypes.isEmpty {
                 photoSettings.previewPhotoFormat = [kCVPixelBufferPixelFormatTypeKey as String: photoSettings.__availablePreviewPhotoPixelFormatTypes.first!]
             }
+            
+            // 设置实时照片存储的url
+            if self.livePhotoMode == .on && self.photoOutput.isLivePhotoCaptureSupported {
+                let livePhotoMovieFileName = NSUUID().uuidString
+                let livePhotoMovieFilePath = (NSTemporaryDirectory() as NSString).appendingPathComponent((livePhotoMovieFileName as NSString).appendingPathExtension("mov")!)
+                photoSettings.livePhotoMovieFileURL = URL(fileURLWithPath: livePhotoMovieFilePath)
+            }
+            
+            photoSettings.isDepthDataDeliveryEnabled = (self.depthDataDeliveryMode == .on && self.photoOutput.isDepthDataDeliveryEnabled)
+            photoSettings.isPortraitEffectsMatteDeliveryEnabled = (self.portraitEffectsMatteDeliveryMode == .on && self.photoOutput.isPortraitEffectsMatteDeliveryEnabled)
             
             let photoCaptureProcessor = PhotoCaptureProcessor(with: photoSettings, willCapturePhotoAnimation: {
                 
@@ -449,6 +551,101 @@ class CameraViewController: UIViewController {
             }
         }
     }
+    
+    // 开关实时照片模式
+    @objc private func toggleLivePhotoMode() {
+        sessionQueue.async {
+            self.livePhotoMode = (self.livePhotoMode == .on) ? .off : .on
+            let livePhotoMode = self.livePhotoMode
+            
+            DispatchQueue.main.async {
+                if livePhotoMode == .on {
+                    self.livePhotoModeButton.setImage(#imageLiteral(resourceName: "LivePhotoON"), for: [])
+                } else {
+                    self.livePhotoModeButton.setImage(#imageLiteral(resourceName: "LivePhotoOFF"), for: [])
+                }
+            }
+        }
+    }
+    
+    // 开关深度数据模式
+    @objc private func toggleDepthDataDeliveryMode() {
+        sessionQueue.async {
+            self.depthDataDeliveryMode = (self.depthDataDeliveryMode == .on) ? .off : .on
+            let depthDataDeliveryMode = self.depthDataDeliveryMode
+            if depthDataDeliveryMode == .on {
+                self.portraitEffectsMatteDeliveryMode = .on
+            } else {
+                self.portraitEffectsMatteDeliveryMode = .off
+            }
+            
+            DispatchQueue.main.async {
+                if depthDataDeliveryMode == .on {
+                    self.depthDataDeliveryButton.setImage(#imageLiteral(resourceName: "DepthON"), for: [])
+                    self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteON"), for: [])
+                } else {
+                    self.depthDataDeliveryButton.setImage(#imageLiteral(resourceName: "DepthOFF"), for: [])
+                    self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteOFF"), for: [])
+                }
+            }
+        }
+    }
+    
+    // 开关人像模式
+    @objc private func togglePortraitEffectsMatteDeliveryMode() {
+        sessionQueue.async {
+            if self.portraitEffectsMatteDeliveryMode == .on {
+                self.portraitEffectsMatteDeliveryMode = .off
+            } else {
+                self.portraitEffectsMatteDeliveryMode = (self.depthDataDeliveryMode == .off) ? .off : .on
+            }
+            
+            let portraitEffectsMatteDeliveryMode = self.portraitEffectsMatteDeliveryMode
+            
+            DispatchQueue.main.async {
+                if portraitEffectsMatteDeliveryMode == .on {
+                    self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteON"), for: [])
+                } else {
+                    self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteOFF"), for: .normal)
+                }
+            }
+        }
+    }
+    
+    // 对焦
+    @objc private func focusAndExposeTap(_ gestureRecognizer: UITapGestureRecognizer) {
+        let devicePoint = previewView.videoPreviewLayer.captureDevicePointConverted(fromLayerPoint: gestureRecognizer.location(in: gestureRecognizer.view))
+        focus(with: .autoFocus, exposureMode: .autoExpose, at: devicePoint, monitorSubjectAreaChange: true)
+    }
+    
+    private func focus(with focusMode: AVCaptureDevice.FocusMode,
+                       exposureMode: AVCaptureDevice.ExposureMode,
+                       at devicePoint: CGPoint,
+                       monitorSubjectAreaChange: Bool) {
+        sessionQueue.async {
+            let device = self.videoDeviceInput.device
+            do {
+                try device.lockForConfiguration()
+                
+                if device.isAutoFocusRangeRestrictionSupported &&
+                    device.isFocusModeSupported(focusMode) {
+                    device.focusPointOfInterest = devicePoint
+                    device.focusMode = focusMode
+                }
+                
+                if device.isExposurePointOfInterestSupported &&
+                    device.isExposureModeSupported(exposureMode) {
+                    device.exposurePointOfInterest = devicePoint
+                    device.exposureMode = exposureMode
+                }
+                
+                device.isSubjectAreaChangeMonitoringEnabled = monitorSubjectAreaChange
+                device.unlockForConfiguration()
+            } catch {
+                print("Could not lock device for configuration: \(error)")
+            }
+        }
+    }
 }
 
 // MARK: KVO and Notification
@@ -457,11 +654,18 @@ extension CameraViewController {
         let keyValueObservation = session.observe(\.isRunning, options: .new) { _, change in
             guard let isSessionRunning = change.newValue else { return }
             
+            let isLivePhotoCaptureEnabled = self.photoOutput.isLivePhotoCaptureEnabled
+            let isDepthDeliveryDataEnable = self.photoOutput.isDepthDataDeliveryEnabled
+            let isPortraitEffectsMatteEnabled = self.photoOutput.isPortraitEffectsMatteDeliveryEnabled
+            
             DispatchQueue.main.async {
                 self.cameraButton.isEnabled = isSessionRunning && self.videoDeviceDiscoverySession.uniqueDevicePositionsCount > 1
                 self.recordButton.isEnabled = isSessionRunning && self.movieFileOutput != nil
                 self.captureButton.isEnabled = isSessionRunning
                 self.captureModeControl.isEnabled = isSessionRunning
+                self.livePhotoModeButton.isEnabled = isSessionRunning && isLivePhotoCaptureEnabled
+                self.depthDataDeliveryButton.isEnabled = isSessionRunning && isDepthDeliveryDataEnable
+                self.portraitEffectsMatteDeliveryButton.isEnabled = isSessionRunning && isPortraitEffectsMatteEnabled
             }
         }
         keyValueObservations.append(keyValueObservation)
@@ -505,7 +709,7 @@ extension CameraViewController {
             } catch {
                 print("Could not lock device for configuration: \(error)")
             }
-        } else {
+        } else if pressureLevel == .shutdown {
             print("Session stopped running due to shutdown system pressure level.")
         }
     }
@@ -568,6 +772,7 @@ extension CameraViewController {
     }
 }
 
+// MARK: 录像回调
 extension CameraViewController: AVCaptureFileOutputRecordingDelegate {
     // 开始录像
     func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
@@ -652,7 +857,7 @@ extension AVCaptureDevice.DiscoverySession {
     }
 }
 
-
+// MARK: UI
 extension CameraViewController {
     private func setupUI() {
         view.addSubview(previewView)
@@ -660,6 +865,9 @@ extension CameraViewController {
         view.addSubview(recordButton)
         view.addSubview(captureButton)
         view.addSubview(cameraButton)
+        view.addSubview(livePhotoModeButton)
+        view.addSubview(depthDataDeliveryButton)
+        view.addSubview(portraitEffectsMatteDeliveryButton)
         
         captureModeControl.snp.makeConstraints { make in
             make.bottom.equalTo(captureButton.snp.top).offset(-10)
@@ -684,6 +892,24 @@ extension CameraViewController {
             make.bottom.equalTo(recordButton)
             make.right.equalToSuperview().offset(-30)
             make.width.height.equalTo(60)
+        }
+        
+        livePhotoModeButton.snp.makeConstraints { make in
+            make.width.height.equalTo(50)
+            make.top.equalTo(view.safeAreaLayoutGuide.snp.top).offset(15)
+            make.left.equalToSuperview().offset(30)
+        }
+        
+        depthDataDeliveryButton.snp.makeConstraints { make in
+            make.width.height.equalTo(50)
+            make.top.equalTo(livePhotoModeButton)
+            make.left.equalTo(livePhotoModeButton.snp.right).offset(30)
+        }
+        
+        portraitEffectsMatteDeliveryButton.snp.makeConstraints { make in
+            make.width.height.equalTo(50)
+            make.top.equalTo(livePhotoModeButton)
+            make.left.equalTo(depthDataDeliveryButton.snp.right).offset(30)
         }
     }
 }

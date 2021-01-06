@@ -98,6 +98,14 @@ class CameraViewController: UIViewController {
         return btn
     }()
     
+    lazy var semanticSegmentationMatteDeliveryButton: UIButton = {
+        let btn = UIButton()
+        btn.tintColor = .yellow
+        btn.setImage(#imageLiteral(resourceName: "ssm"), for: .normal)
+        btn.addTarget(self, action: #selector(toggleSemanticSegmentationMatteDeliveryMode), for: .touchUpInside)
+        return btn
+    }()
+    
     lazy var focusGes: UITapGestureRecognizer = {
         let ges = UITapGestureRecognizer(target: self, action: #selector(focusAndExposeTap(_:)))
         return ges
@@ -119,6 +127,7 @@ class CameraViewController: UIViewController {
     private var livePhotoMode: LivePhotoMode = .off
     private var depthDataDeliveryMode: DepthDataDeliveryMode = .off
     private var portraitEffectsMatteDeliveryMode: PortraitEffectsMatteDeliveryMode = .off
+    private var selectedSemanticSegmentationMatteTypes = [AVSemanticSegmentationMatte.MatteType]() // 语义分割
     
     // MARK: life cycle
     override func viewDidLoad() {
@@ -134,6 +143,7 @@ class CameraViewController: UIViewController {
         captureButton.isEnabled = false
         livePhotoModeButton.isEnabled = false
         depthDataDeliveryButton.isEnabled = false
+        semanticSegmentationMatteDeliveryButton.isEnabled = false
         
         previewView.session = session
         
@@ -293,6 +303,8 @@ class CameraViewController: UIViewController {
             photoOutput.isLivePhotoCaptureEnabled = photoOutput.isLivePhotoCaptureSupported
             photoOutput.isDepthDataDeliveryEnabled = photoOutput.isDepthDataDeliverySupported
             photoOutput.isPortraitEffectsMatteDeliveryEnabled = photoOutput.isPortraitEffectsMatteDeliverySupported
+            photoOutput.enabledSemanticSegmentationMatteTypes = photoOutput.enabledSemanticSegmentationMatteTypes
+            selectedSemanticSegmentationMatteTypes = photoOutput.availableSemanticSegmentationMatteTypes
             
             livePhotoMode = photoOutput.isLivePhotoCaptureSupported ? .on : .off
             depthDataDeliveryMode = photoOutput.isDepthDataDeliverySupported ? .on : .off
@@ -343,6 +355,11 @@ class CameraViewController: UIViewController {
                 
                 if !self.photoOutput.availableSemanticSegmentationMatteTypes.isEmpty {
                     self.photoOutput.enabledSemanticSegmentationMatteTypes = self.photoOutput.availableSemanticSegmentationMatteTypes
+                    self.selectedSemanticSegmentationMatteTypes = self.photoOutput.enabledSemanticSegmentationMatteTypes
+                    
+                    DispatchQueue.main.async {
+                        self.semanticSegmentationMatteDeliveryButton.isEnabled = (self.depthDataDeliveryMode == .on) ? true : false
+                    }
                 }
                 
                 DispatchQueue.main.async {
@@ -448,7 +465,9 @@ class CameraViewController: UIViewController {
                     self.photoOutput.isLivePhotoCaptureEnabled = self.photoOutput.isLivePhotoCaptureSupported
                     self.photoOutput.isDepthDataDeliveryEnabled = self.photoOutput.isDepthDataDeliverySupported
                     self.photoOutput.isPortraitEffectsMatteDeliveryEnabled = self.photoOutput.isPortraitEffectsMatteDeliverySupported
-                    
+                    self.photoOutput.enabledSemanticSegmentationMatteTypes = self.photoOutput.availableSemanticSegmentationMatteTypes
+                    self.selectedSemanticSegmentationMatteTypes = self.photoOutput.availableSemanticSegmentationMatteTypes
+
                     self.session.commitConfiguration()
                 } catch {
                     print("Error occurred while creating video device input: \(error)")
@@ -463,6 +482,7 @@ class CameraViewController: UIViewController {
                 self.captureModeControl.isEnabled = true
                 self.depthDataDeliveryButton.isEnabled = self.photoOutput.isDepthDataDeliveryEnabled
                 self.portraitEffectsMatteDeliveryButton.isEnabled = self.photoOutput.isPortraitEffectsMatteDeliveryEnabled
+                self.semanticSegmentationMatteDeliveryButton.isEnabled = (self.photoOutput.availableSemanticSegmentationMatteTypes.isEmpty || self.depthDataDeliveryMode == .off) ? false : true
             }
         }
     }
@@ -583,9 +603,11 @@ class CameraViewController: UIViewController {
                 if depthDataDeliveryMode == .on {
                     self.depthDataDeliveryButton.setImage(#imageLiteral(resourceName: "DepthON"), for: [])
                     self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteON"), for: [])
+                    self.semanticSegmentationMatteDeliveryButton.isEnabled = true
                 } else {
                     self.depthDataDeliveryButton.setImage(#imageLiteral(resourceName: "DepthOFF"), for: [])
                     self.portraitEffectsMatteDeliveryButton.setImage(#imageLiteral(resourceName: "PortraitMatteOFF"), for: [])
+                    self.semanticSegmentationMatteDeliveryButton.isEnabled = false
                 }
             }
         }
@@ -612,6 +634,19 @@ class CameraViewController: UIViewController {
         }
     }
     
+    // 语义分割
+    @objc private func toggleSemanticSegmentationMatteDeliveryMode() {
+        let itemSelectionViewController = ItemSelectionViewController()
+        presentItemSelectionViewController(itemSelectionViewController)
+    }
+    
+    private func presentItemSelectionViewController(_ itemSelectionViewController: ItemSelectionViewController) {
+        let navigationController = UINavigationController(rootViewController: itemSelectionViewController)
+        navigationController.navigationBar.barTintColor = .black
+        navigationController.navigationBar.tintColor = view.tintColor
+        present(navigationController, animated: true, completion: nil)
+    }
+     
     // 对焦
     @objc private func focusAndExposeTap(_ gestureRecognizer: UITapGestureRecognizer) {
         let devicePoint = previewView.videoPreviewLayer.captureDevicePointConverted(fromLayerPoint: gestureRecognizer.location(in: gestureRecognizer.view))
@@ -657,7 +692,8 @@ extension CameraViewController {
             let isLivePhotoCaptureEnabled = self.photoOutput.isLivePhotoCaptureEnabled
             let isDepthDeliveryDataEnable = self.photoOutput.isDepthDataDeliveryEnabled
             let isPortraitEffectsMatteEnabled = self.photoOutput.isPortraitEffectsMatteDeliveryEnabled
-            
+            let isSemanticSegmentationMatteEnabled = !self.photoOutput.enabledSemanticSegmentationMatteTypes.isEmpty
+
             DispatchQueue.main.async {
                 self.cameraButton.isEnabled = isSessionRunning && self.videoDeviceDiscoverySession.uniqueDevicePositionsCount > 1
                 self.recordButton.isEnabled = isSessionRunning && self.movieFileOutput != nil
@@ -666,6 +702,7 @@ extension CameraViewController {
                 self.livePhotoModeButton.isEnabled = isSessionRunning && isLivePhotoCaptureEnabled
                 self.depthDataDeliveryButton.isEnabled = isSessionRunning && isDepthDeliveryDataEnable
                 self.portraitEffectsMatteDeliveryButton.isEnabled = isSessionRunning && isPortraitEffectsMatteEnabled
+                self.semanticSegmentationMatteDeliveryButton.isEnabled = isSessionRunning && isSemanticSegmentationMatteEnabled
             }
         }
         keyValueObservations.append(keyValueObservation)
@@ -868,6 +905,7 @@ extension CameraViewController {
         view.addSubview(livePhotoModeButton)
         view.addSubview(depthDataDeliveryButton)
         view.addSubview(portraitEffectsMatteDeliveryButton)
+        view.addSubview(semanticSegmentationMatteDeliveryButton)
         
         captureModeControl.snp.makeConstraints { make in
             make.bottom.equalTo(captureButton.snp.top).offset(-10)
@@ -903,13 +941,19 @@ extension CameraViewController {
         depthDataDeliveryButton.snp.makeConstraints { make in
             make.width.height.equalTo(50)
             make.top.equalTo(livePhotoModeButton)
-            make.left.equalTo(livePhotoModeButton.snp.right).offset(30)
+            make.centerX.equalToSuperview().offset(-50)
         }
         
         portraitEffectsMatteDeliveryButton.snp.makeConstraints { make in
             make.width.height.equalTo(50)
             make.top.equalTo(livePhotoModeButton)
-            make.left.equalTo(depthDataDeliveryButton.snp.right).offset(30)
+            make.centerX.equalToSuperview().offset(50)
+        }
+        
+        semanticSegmentationMatteDeliveryButton.snp.makeConstraints { make in
+            make.width.height.equalTo(50)
+            make.top.equalTo(livePhotoModeButton)
+            make.right.equalToSuperview().offset(-30)
         }
     }
 }

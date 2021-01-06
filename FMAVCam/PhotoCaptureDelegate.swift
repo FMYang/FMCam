@@ -33,6 +33,7 @@ class PhotoCaptureProcessor: NSObject {
     
     private var maxPhotoProcessingTime: CMTime?
     
+    // 因为要在init方法return之后使用闭包，所以要声明为逃逸闭包
     init(with requestedPhotoSettings: AVCapturePhotoSettings,
          willCapturePhotoAnimation: @escaping () -> Void,
          livePhotoCaptureHandler: @escaping (Bool) -> Void,

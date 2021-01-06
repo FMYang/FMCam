@@ -8,14 +8,22 @@
 
 import UIKit
 
-class ItemSelectionViewController: UIViewController {
+class ItemSelectionViewController: UITableViewController {
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-
-        // Do any additional setup after loading the view.
+    init() {
+        super.init(style: .grouped)
+        
+        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(done))
+        view.tintColor = .black
     }
     
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    @objc private func done() {
+        dismiss(animated: true, completion: nil)
+    }
 
     /*
     // MARK: - Navigation

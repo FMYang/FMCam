@@ -11,7 +11,7 @@ import AVFoundation
 import SnapKit
 import Photos
 
-class CameraViewController: UIViewController {
+class CameraViewController: UIViewController, ItemSelectionViewControllerDelegate {
     
     private enum SessionSetupResult {
         case success
@@ -116,7 +116,7 @@ class CameraViewController: UIViewController {
     private let sessionQueue = DispatchQueue(label: "session queue")
     private let session = AVCaptureSession()
     private var isSessionRunning = false
-    @objc dynamic var videoDeviceInput: AVCaptureDeviceInput!
+    @objc var videoDeviceInput: AVCaptureDeviceInput!
     private let photoOutput = AVCapturePhotoOutput()
     private var movieFileOutput: AVCaptureMovieFileOutput?
     private var setupResult: SessionSetupResult = .success
@@ -128,6 +128,7 @@ class CameraViewController: UIViewController {
     private var depthDataDeliveryMode: DepthDataDeliveryMode = .off
     private var portraitEffectsMatteDeliveryMode: PortraitEffectsMatteDeliveryMode = .off
     private var selectedSemanticSegmentationMatteTypes = [AVSemanticSegmentationMatte.MatteType]() // 语义分割
+    let semanticSegmentationTypeItemSelectionIdentifier = "SemanticSegmentationTypes"
     
     // MARK: life cycle
     override func viewDidLoad() {
@@ -521,6 +522,12 @@ class CameraViewController: UIViewController {
             photoSettings.isDepthDataDeliveryEnabled = (self.depthDataDeliveryMode == .on && self.photoOutput.isDepthDataDeliveryEnabled)
             photoSettings.isPortraitEffectsMatteDeliveryEnabled = (self.portraitEffectsMatteDeliveryMode == .on && self.photoOutput.isPortraitEffectsMatteDeliveryEnabled)
             
+            if photoSettings.isDepthDataDeliveryEnabled {
+                if !self.photoOutput.availableSemanticSegmentationMatteTypes.isEmpty {
+                    photoSettings.enabledSemanticSegmentationMatteTypes = self.selectedSemanticSegmentationMatteTypes
+                }
+            }
+            
             let photoCaptureProcessor = PhotoCaptureProcessor(with: photoSettings, willCapturePhotoAnimation: {
                 
             }, livePhotoCaptureHandler: { (finish) in
@@ -636,7 +643,8 @@ class CameraViewController: UIViewController {
     
     // 语义分割
     @objc private func toggleSemanticSegmentationMatteDeliveryMode() {
-        let itemSelectionViewController = ItemSelectionViewController()
+        let itemSelectionViewController = ItemSelectionViewController(delegate: self, identifier: semanticSegmentationTypeItemSelectionIdentifier, allItems: selectedSemanticSegmentationMatteTypes, selectedItems: photoOutput.enabledSemanticSegmentationMatteTypes, allowsMultipleSelection: true)
+        
         presentItemSelectionViewController(itemSelectionViewController)
     }
     
@@ -647,6 +655,16 @@ class CameraViewController: UIViewController {
         present(navigationController, animated: true, completion: nil)
     }
      
+    func itemSelectionViewController(_ itemSelectionViewController: ItemSelectionViewController, didFinishSelectingItems selectedItems: [AVSemanticSegmentationMatte.MatteType]) {
+        let identifier = itemSelectionViewController.identifer
+        
+        if identifier == semanticSegmentationTypeItemSelectionIdentifier {
+            sessionQueue.async {
+                self.selectedSemanticSegmentationMatteTypes = selectedItems
+            }
+        }
+    }
+    
     // 对焦
     @objc private func focusAndExposeTap(_ gestureRecognizer: UITapGestureRecognizer) {
         let devicePoint = previewView.videoPreviewLayer.captureDevicePointConverted(fromLayerPoint: gestureRecognizer.location(in: gestureRecognizer.view))

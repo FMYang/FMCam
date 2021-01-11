@@ -7,13 +7,44 @@
 //
 
 import UIKit
+import AVFoundation
+
+protocol ItemSelectionViewControllerDelegate: class {
+    func itemSelectionViewController(_ itemSelectionViewController: ItemSelectionViewController,
+                                     didFinishSelectingItems selectedItems: [AVSemanticSegmentationMatte.MatteType])
+}
 
 class ItemSelectionViewController: UITableViewController {
+    
+    weak var delegate: ItemSelectionViewControllerDelegate?
+    
+    let identifer: String
+    
+    let allItems: [AVSemanticSegmentationMatte.MatteType]
+    
+    var selectedItems: [AVSemanticSegmentationMatte.MatteType]
+    
+    let allowsMultipleSelection: Bool
+    
+    private let itemCellIdentifier = "Item"
 
-    init() {
+    init(delegate: ItemSelectionViewControllerDelegate,
+         identifier: String,
+         allItems: [AVSemanticSegmentationMatte.MatteType],
+         selectedItems: [AVSemanticSegmentationMatte.MatteType],
+         allowsMultipleSelection: Bool) {
+        
+        self.delegate = delegate
+        self.identifer = identifier
+        self.allItems = allItems
+        self.selectedItems = selectedItems
+        self.allowsMultipleSelection = allowsMultipleSelection
+        
         super.init(style: .grouped)
         
         navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(done))
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: itemCellIdentifier)
+
         view.tintColor = .black
     }
     
@@ -22,17 +53,32 @@ class ItemSelectionViewController: UITableViewController {
     }
     
     @objc private func done() {
+        delegate?.itemSelectionViewController(self, didFinishSelectingItems: selectedItems)
         dismiss(animated: true, completion: nil)
     }
 
-    /*
-    // MARK: - Navigation
-
-    // In a storyboard-based application, you will often want to do a little preparation before navigation
-    override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
-        // Get the new view controller using segue.destination.
-        // Pass the selected object to the new view controller.
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        return allItems.count
     }
-    */
+    
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let ssmType = allItems[indexPath.row]
+        
+        let cell = tableView.dequeueReusableCell(withIdentifier: itemCellIdentifier, for: indexPath)
+        
+        switch ssmType {
+        case .hair:
+            cell.textLabel?.text = "Hair"
+        case .teeth:
+            cell.textLabel?.text = "Teeth"
+        case .skin:
+            cell.textLabel?.text = "Skin"
+        default:
+            fatalError("UnKnown matte type specified.")
+        }
+        
+        cell.accessoryType = selectedItems.contains(ssmType) ? .checkmark : .none
+        return cell
+    }
 
 }

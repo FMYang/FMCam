@@ -6,7 +6,6 @@
 //  Copyright © 2021 yfm. All rights reserved.
 //
 
-import UIKit
 import AVFoundation
 import Photos
 
@@ -101,8 +100,17 @@ extension PhotoCaptureProcessor: AVCapturePhotoCaptureDelegate {
         } else {
             portraitEffectsMatteData = nil
         }
+        
+        for semanticSegmentationType in output.enabledSemanticSegmentationMatteTypes {
+            handleMatteData(photo, ssmType: semanticSegmentationType)
+        }
     }
     
+    /// - Tag: didFinishRecordingLivePhotoMovie
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishRecordingLivePhotoMovieForEventualFileAt outputFileURL: URL, resolvedSettings: AVCaptureResolvedPhotoSettings) {
+        livePhotoCaptureHandler(false)
+    }
+        
     /// - Tag: 实时照片处理完成 DidFinishProcessingLive
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingLivePhotoToMovieFileAt outputFileURL: URL, duration: CMTime, photoDisplayTime: CMTime, resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
         print("DidFinishProcessingLive \(outputFileURL)")
@@ -145,6 +153,11 @@ extension PhotoCaptureProcessor: AVCapturePhotoCaptureDelegate {
                         creationRequest.addResource(with: .photo, data: portraitEffectsMatteData, options: nil)
                     }
                     
+                    for semanticSementationMatteData in self.semanticSegmentionMatteDataArray {
+                        let creationRequest = PHAssetCreationRequest.forAsset()
+                        creationRequest.addResource(with: .photo, data: semanticSementationMatteData, options: nil)
+                    }
+                    
                 }, completionHandler: { (_, error) in
                     if let error = error {
                         print("Error occurred while saving photo to photo library: \(error)")
@@ -156,4 +169,37 @@ extension PhotoCaptureProcessor: AVCapturePhotoCaptureDelegate {
             }
         }
     }
+    
+    func handleMatteData(_ photo: AVCapturePhoto, ssmType: AVSemanticSegmentationMatte.MatteType) {
+        guard var segmentationMatte = photo.semanticSegmentationMatte(for: ssmType) else { return  }
+        
+        if let orientation = photo.metadata[String(kCGImagePropertyOrientation)] as? UInt32,
+            let exifOrientation = CGImagePropertyOrientation(rawValue: orientation) {
+            segmentationMatte = segmentationMatte.applyingExifOrientation(exifOrientation)
+        }
+        
+        var imageOption: CIImageOption!
+        
+        switch ssmType {
+        case .hair:
+            imageOption = .auxiliarySemanticSegmentationHairMatte
+        case .skin:
+            imageOption = .auxiliarySemanticSegmentationSkinMatte
+        case .teeth:
+            imageOption = .auxiliarySemanticSegmentationTeethMatte
+        default:
+            print("This semantic segmentation type is not supported!")
+            return
+        }
+        
+        guard let perceptualColorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return }
+        
+        let ciImage = CIImage(cvImageBuffer: segmentationMatte.mattingImage,
+                              options: [imageOption: true, .colorSpace: perceptualColorSpace])
+        
+        guard let imageData = context.heifRepresentation(of: ciImage, format: .RGBA8, colorSpace: perceptualColorSpace, options: [.depthImage: ciImage]) else { return }
+        
+        semanticSegmentionMatteDataArray.append(imageData)
+    }
+
 }

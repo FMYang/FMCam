@@ -112,6 +112,9 @@ class CameraViewController: UIViewController, ItemSelectionViewControllerDelegat
     }()
     
     /* 存储型类型属性是延迟初始化的，它们只有在第一次被访问的时候才会被初始化。即使它们被多个线程同时访问，系统也保证只会对其进行一次初始化，并且不需要对其使用 lazy 修饰符。
+     
+     如果一个被标记为 lazy 的属性在没有初始化时就同时被多个线程访问，则无法保证该属性只会被初始化一次。
+
      */
     private let sessionQueue = DispatchQueue(label: "session queue")
     private let session = AVCaptureSession()
